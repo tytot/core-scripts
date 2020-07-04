@@ -8,13 +8,14 @@ import optparse
 from core import pycore
 from core.misc import ipaddr
 from core.constants import *
+from core.api import coreapi
 from array import *
 import time
+import threading
 
-batallion = None
-COMPANIES_IN_BATALLION = 6
-PLATOONS_IN_COMPANY = 5
-HOSTS_IN_PLATOON = 16
+COMPANIES_IN_BATALLION = 1
+PLATOONS_IN_COMPANY = 1
+HOSTS_IN_PLATOON = 2
 
 
 class Platoon:
@@ -146,6 +147,41 @@ class Batallion:
         self.companies.append(company)
 
 
+class MovementConfig:
+    def __init__(self, node, start_pos, end_pos):
+        self.node = node
+        self.start_pos = start_pos
+        self.end_pos = end_pos
+
+
+def movement_thread(batallion, session, refresh_ms):
+    def move_nodes(configs, duration):
+        elapsed = 0
+        deltas = map(lambda config: (config.end_pos[0] - config.start_pos[0], config.end_pos[1] -
+                                    config.start_pos[1], 0), configs)
+        while (elapsed <= duration):
+            print elapsed
+            lerp_amount = elapsed / duration
+            for i in xrange(len(configs)):
+                config = configs[i]
+                delta = deltas[i]
+                new_pos = (config.start_pos[0] + lerp_amount * delta[0], config.start_pos[1] +
+                        lerp_amount * delta[1], config.start_pos[1] + lerp_amount * delta[1])
+                config.node.setposition(new_pos[0], new_pos[1], new_pos[2])
+                msg = config.node.tonodemsg(flags=0)
+                session.broadcastraw(None, msg)
+                session.sdt.updatenode(config.node.objid, flags=0,
+                                    x=new_pos[0], y=new_pos[1], z=new_pos[2])
+            elapsed += 0.001 * refresh_ms
+            time.sleep(0.001 * refresh_ms)
+
+    node1 = batallion.companies[1].platoons[1].hosts[1]
+    node2 = batallion.companies[1].platoons[1].hosts[2]
+    configs = [MovementConfig(node1, node1.position.get(), (700, 700, 0)), MovementConfig(node2, node2.position.get(), (700, 100, 0))]
+    move_nodes(configs, 20)
+
+
+
 def main():
 
     # usagestr = "usage: %prog [-h] [options] [args]"
@@ -182,13 +218,18 @@ def main():
         ((PLATOONS_IN_COMPANY * (HOSTS_IN_PLATOON + 3)) + 2) + 1
     session.node_count = num_nodes
     print('Finished creating %d nodes.' % num_nodes)
-    session.instantiate()
+
+    thread = threading.Thread(target=movement_thread,
+                              args=(batallion, session, 125,))
+    thread.start()
+    thread.join()
 
     print "elapsed time: %s" % (datetime.datetime.now() - start)
 
     # tests
 
     # nodes[1].setposition(x=500.0,y=300.0)
+    # batallion.companies[1].platoons[1].hosts[1].setposition(x=500,y=500)
 
 
 if __name__ == '__main__' or __name__ == '__builtin__':
