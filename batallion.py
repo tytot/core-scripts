@@ -15,7 +15,7 @@ import threading
 
 COMPANIES_IN_BATALLION = 1
 PLATOONS_IN_COMPANY = 1
-HOSTS_IN_PLATOON = 2
+HOSTS_IN_PLATOON = 3
 
 
 class Platoon:
@@ -148,38 +148,75 @@ class Batallion:
 
 
 class MovementConfig:
-    def __init__(self, node, start_pos, end_pos):
+    def __init__(self, node, start_pos, end_pos, start_time, end_time):
         self.node = node
         self.start_pos = start_pos
         self.end_pos = end_pos
+        self.start_time = start_time
+        self.end_time = end_time
 
 
 def movement_thread(batallion, session, refresh_ms):
-    def move_nodes(configs, duration):
+    def move_nodes(configs):
+        # elapsed = 0
+        # deltas = map(lambda config: (config.end_pos[0] - config.start_pos[0], config.end_pos[1] -
+        #                             config.start_pos[1], 0), configs)
+        # while elapsed <= duration:
+        #     print elapsed
+        #     lerp_amount = elapsed / duration
+        #     for i in xrange(len(configs)):
+        #         config = configs[i]
+        #         delta = deltas[i]
+        #         new_pos = (config.start_pos[0] + lerp_amount * delta[0], config.start_pos[1] +
+        #                 lerp_amount * delta[1], config.start_pos[1] + lerp_amount * delta[1])
+        #         config.node.setposition(new_pos[0], new_pos[1], new_pos[2])
+        #         msg = config.node.tonodemsg(flags=0)
+        #         session.broadcastraw(None, msg)
+        #         session.sdt.updatenode(config.node.objid, flags=0,
+        #                             x=new_pos[0], y=new_pos[1], z=new_pos[2])
+        #     elapsed += 0.001 * refresh_ms
+        #     time.sleep(0.001 * refresh_ms)
+
         elapsed = 0
-        deltas = map(lambda config: (config.end_pos[0] - config.start_pos[0], config.end_pos[1] -
-                                    config.start_pos[1], 0), configs)
-        while (elapsed <= duration):
-            print elapsed
-            lerp_amount = elapsed / duration
-            for i in xrange(len(configs)):
-                config = configs[i]
-                delta = deltas[i]
-                new_pos = (config.start_pos[0] + lerp_amount * delta[0], config.start_pos[1] +
-                        lerp_amount * delta[1], config.start_pos[1] + lerp_amount * delta[1])
-                config.node.setposition(new_pos[0], new_pos[1], new_pos[2])
-                msg = config.node.tonodemsg(flags=0)
-                session.broadcastraw(None, msg)
-                session.sdt.updatenode(config.node.objid, flags=0,
-                                    x=new_pos[0], y=new_pos[1], z=new_pos[2])
+        while configs:
+            for config in configs:
+                current = config[0]
+                if elapsed >= current.start_time:
+                    lerp_amount = (elapsed - current.start_time) / \
+                        (current.end_time - current.start_time)
+                    delta = (current.end_pos[0] - current.start_pos[0],
+                             current.end_pos[1] - current.start_pos[1], 0)
+                    new_pos = (current.start_pos[0] + lerp_amount * delta[0],
+                               current.start_pos[1] + lerp_amount * delta[1], 0)
+                    current.node.setposition(new_pos[0], new_pos[1], 0)
+                    msg = current.node.tonodemsg(flags=0)
+                    session.broadcastraw(None, msg)
+                    session.sdt.updatenode(
+                        current.node.objid, flags=0, x=new_pos[0], y=new_pos[1], z=new_pos[2])
+                    if elapsed + 0.001 * refresh_ms >= current.end_time:
+                        del config[0]
+                        if not config:
+                            configs.remove(config)
             elapsed += 0.001 * refresh_ms
             time.sleep(0.001 * refresh_ms)
 
     node1 = batallion.companies[1].platoons[1].hosts[1]
     node2 = batallion.companies[1].platoons[1].hosts[2]
-    configs = [MovementConfig(node1, node1.position.get(), (700, 700, 0)), MovementConfig(node2, node2.position.get(), (700, 100, 0))]
-    move_nodes(configs, 20)
-
+    node3 = batallion.companies[1].platoons[1].hosts[3]
+    configs = [
+        [
+            MovementConfig(node1, node1.position.get(), (700, 700, 0), 0, 20), 
+            MovementConfig(node1, (700, 700, 0), (100, 100, 0), 20, 40)
+        ], 
+        [
+            MovementConfig(node2, node2.position.get(), (700, 100, 0), 0, 20),
+            MovementConfig(node2, (700, 100, 0), (11, 100, 0), 20, 50)
+        ], 
+        [
+            MovementConfig(node3, node3.position.get(), (300, 700, 0), 0, 20)
+        ]
+    ]
+    move_nodes(configs)
 
 
 def main():
@@ -225,11 +262,6 @@ def main():
     thread.join()
 
     print "elapsed time: %s" % (datetime.datetime.now() - start)
-
-    # tests
-
-    # nodes[1].setposition(x=500.0,y=300.0)
-    # batallion.companies[1].platoons[1].hosts[1].setposition(x=500,y=500)
 
 
 if __name__ == '__main__' or __name__ == '__builtin__':
