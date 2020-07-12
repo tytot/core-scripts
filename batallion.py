@@ -17,6 +17,10 @@ import threading
 COMPANIES_IN_BATALLION = 1
 PLATOONS_IN_COMPANY = 1
 HOSTS_IN_PLATOON = 3
+CSV = ''',0,10,15,25
+1.1.1.1,100 100,400 100,,700 100
+1.1.1.2,100 200,,400 200,700 200
+1.1.1.3,100 300,200 300,600 300,700 300'''
 
 
 class Platoon:
@@ -156,74 +160,113 @@ class MovementConfig:
         self.start_time = start_time
         self.end_time = end_time
 
+    def __repr__(self):
+        return '{}({!r}, {!r}, {!r}, {!r}, {!r})'.format(
+            self.__class__.__name__,
+            self.node.objid, self.start_pos, self.end_pos, self.start_time, self.end_time)
 
-def movement_thread(batallion, session, refresh_ms):
-    def move_nodes(configs):
-        elapsed = 0
-        while configs:
-            for config in configs:
-                current = config[0]
-                if elapsed >= current.start_time:
-                    lerp_amount = (elapsed - current.start_time) / \
-                        (current.end_time - current.start_time)
-                    delta = (current.end_pos[0] - current.start_pos[0],
-                             current.end_pos[1] - current.start_pos[1], 0)
-                    new_pos = (current.start_pos[0] + lerp_amount * delta[0],
-                               current.start_pos[1] + lerp_amount * delta[1], 0)
-                    current.node.setposition(new_pos[0], new_pos[1], 0)
-                    msg = current.node.tonodemsg(flags=0)
-                    session.broadcastraw(None, msg)
-                    session.sdt.updatenode(
-                        current.node.objid, flags=0, x=new_pos[0], y=new_pos[1], z=new_pos[2])
-                    if elapsed + 0.001 * refresh_ms >= current.end_time:
-                        del config[0]
-                        if not config:
-                            configs.remove(config)
-            elapsed += 0.001 * refresh_ms
-            time.sleep(0.001 * refresh_ms)
+
+def movement_thread(configs, session, refresh_ms):
+    elapsed = 0
+    while configs:
+        print elapsed
+        configs = [config for config in configs if config != []]
+        for config in configs:
+            current = config[0]
+            if elapsed >= current.start_time:
+                lerp_amount = (elapsed - current.start_time) / \
+                    (current.end_time - current.start_time)
+                delta = (current.end_pos[0] - current.start_pos[0],
+                         current.end_pos[1] - current.start_pos[1], 0)
+                new_pos = (current.start_pos[0] + lerp_amount * delta[0],
+                           current.start_pos[1] + lerp_amount * delta[1], 0)
+                current.node.setposition(new_pos[0], new_pos[1], 0)
+                msg = current.node.tonodemsg(flags=0)
+                session.broadcastraw(None, msg)
+                session.sdt.updatenode(
+                    current.node.objid, flags=0, x=new_pos[0], y=new_pos[1], z=new_pos[2])
+                if elapsed + 0.001 * refresh_ms > current.end_time:
+                    del config[0]
+        elapsed += 0.001 * refresh_ms
+        time.sleep(0.001 * refresh_ms)
+
+
+def generate_configs(csv, batallion):
+    def pos_to_tuple(pos):
+        coords = pos.split()
+        return (int(coords[0]), int(coords[1]), 0)
+
+    line = 0
+    configs = []
+    for raw in iter(csv.splitlines()):
+        row = raw.split(',')
+        if line == 0:
+            times = row
+            line += 1
+            batallion.companies[1].platoons[1].hosts[1].setposition(
+                700, 700, 0)
+        else:
+            configs.append([])
+            octets = row[0].split('.')
+            node = batallion.companies[int(octets[1])
+                                       ].platoons[int(octets[2])].hosts[int(octets[3])]
+            last_waypoint_index = None
+            for i in xrange(1, len(row)):
+                if row[i]:
+                    if (last_waypoint_index is None):
+                        if (i != 1):
+                            configs[line - 1].append(MovementConfig(
+                                node, node.position.get(), pos_to_tuple(row[i]), 0, int(times[i])))
+                    else:
+                        configs[line - 1].append(MovementConfig(node, pos_to_tuple(
+                            row[last_waypoint_index]), pos_to_tuple(row[i]), int(times[last_waypoint_index]), int(times[i])))
+                    last_waypoint_index = i
+            line += 1
+
+    # with open('batallion_movement.csv') as csv_file:
+    #     csv_reader = csv.reader(csv_file, delimiter=',')
+    #     line = 0
+    #     for row in csv_reader:
+    #         if line == 0:
+    #             times = row
+    #             line += 1
+    #             batallion.companies[1].platoons[1].hosts[1].setposition(700, 700, 0)
+    #         else:
+    #             octets = row[0].split('.')
+    #             node = batallion.companies[int(octets[1])
+    #                                        ].platoons[int(octets[2])].hosts[int(octets[3])]
+    #             last_waypoint_index = None
+    #             for i in xrange(1, len(row)):
+    #                 if row[i]:
+    #                     if (last_waypoint_index is None):
+    #                         if (i != 1):
+    #                             configs[line - 1].append(MovementConfig(
+    #                                 node, node.position.get(), pos_to_tuple(row[i]), 0, int(times[i])))
+    #                     else:
+    #                         configs[line - 1].append(MovementConfig(node, pos_to_tuple(
+    #                             row[last_waypoint_index]), pos_to_tuple(row[i]), int(times[last_waypoint_index]), int(times[i])))
+    #                     last_waypoint_index = i
+    #             line += 1
 
     # node1 = batallion.companies[1].platoons[1].hosts[1]
     # node2 = batallion.companies[1].platoons[1].hosts[2]
     # node3 = batallion.companies[1].platoons[1].hosts[3]
     # configs = [
     #     [
-    #         MovementConfig(node1, node1.position.get(), (700, 700, 0), 0, 20), 
+    #         MovementConfig(node1, node1.position.get(), (700, 700, 0), 0, 20),
     #         MovementConfig(node1, (700, 700, 0), (100, 100, 0), 20, 40)
-    #     ], 
+    #     ],
     #     [
     #         MovementConfig(node2, node2.position.get(), (700, 100, 0), 0, 20),
     #         MovementConfig(node2, (700, 100, 0), (11, 100, 0), 20, 50)
-    #     ], 
+    #     ],
     #     [
     #         MovementConfig(node3, node3.position.get(), (300, 700, 0), 0, 20)
     #     ]
     # ]
-    # move_nodes(configs)
 
-    def pos_to_tuple(pos):
-        coords = pos.split()
-        return (coords[0], coords[1], 0)
-
-    with open('batallion_movement.csv') as csv_file:
-        csv_reader = csv.reader(csv_file, delimiter=',')
-        configs = [[] for i in xrange(len(csv_reader))]
-        times = csv_reader[0]
-        line = 0
-        for row in csv_reader:
-            if line > 0:
-                octets = row[0].split('.')
-                node = batallion.companies[octets[0]].platoons[octets[1]].hosts[octets[2]]
-                last_waypoint_index = None
-                for i in xrange(1, len(row)):
-                    if row[i]:
-                        if (last_waypoint_index is None):
-                            if (i != 1):
-                                configs[line - 1].append(MovementConfig(node, node.position.get(), pos_to_tuple(row[i]), 0, times[i]))
-                        else:
-                            configs[line - 1].append(MovementConfig(node, pos_to_tuple(row[last_waypoint_index]), pos_to_tuple(row[i]), times[last_waypoint_index], times[i]))
-                        last_waypoint_index = i
-                line += 1
-        move_nodes(configs)
+    print configs
+    return configs
 
 
 def main():
@@ -238,14 +281,15 @@ def main():
     num_nodes = COMPANIES_IN_BATALLION * \
         ((PLATOONS_IN_COMPANY * (HOSTS_IN_PLATOON + 3)) + 2) + 1
     session.node_count = num_nodes
-    print('Finished creating %d nodes.' % num_nodes)
+    print 'Finished creating %d nodes.' % num_nodes
 
+    configs = generate_configs(CSV, batallion)
     thread = threading.Thread(target=movement_thread,
-                              args=(batallion, session, 125,))
+                              args=(configs, session, 1000,))
     thread.start()
     thread.join()
 
-    print("elapsed time: %s" % (datetime.datetime.now() - start))
+    print "elapsed time: %s" % (datetime.datetime.now() - start)
 
 
 if __name__ == '__main__' or __name__ == '__builtin__':
