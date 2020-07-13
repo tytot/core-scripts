@@ -17,10 +17,6 @@ import threading
 COMPANIES_IN_BATALLION = 1
 PLATOONS_IN_COMPANY = 1
 HOSTS_IN_PLATOON = 3
-CSV = ''',0,10,15,25
-1.1.1.1,100 100,400 100,,700 100
-1.1.1.2,100 200,,400 200,700 200
-1.1.1.3,100 300,200 300,600 300,700 300'''
 
 
 class Platoon:
@@ -169,7 +165,6 @@ class MovementConfig:
 def movement_thread(configs, session, refresh_ms):
     elapsed = 0
     while configs:
-        print elapsed
         configs = [config for config in configs if config != []]
         for config in configs:
             current = config[0]
@@ -191,62 +186,37 @@ def movement_thread(configs, session, refresh_ms):
         time.sleep(0.001 * refresh_ms)
 
 
-def generate_configs(csv, batallion):
+def generate_configs(batallion):
     def pos_to_tuple(pos):
         coords = pos.split()
         return (int(coords[0]), int(coords[1]), 0)
 
-    line = 0
     configs = []
-    for raw in iter(csv.splitlines()):
-        row = raw.split(',')
-        if line == 0:
-            times = row
-            line += 1
-            batallion.companies[1].platoons[1].hosts[1].setposition(
-                700, 700, 0)
-        else:
-            configs.append([])
-            octets = row[0].split('.')
-            node = batallion.companies[int(octets[1])
-                                       ].platoons[int(octets[2])].hosts[int(octets[3])]
-            last_waypoint_index = None
-            for i in xrange(1, len(row)):
-                if row[i]:
-                    if (last_waypoint_index is None):
-                        if (i != 1):
-                            configs[line - 1].append(MovementConfig(
-                                node, node.position.get(), pos_to_tuple(row[i]), 0, int(times[i])))
-                    else:
-                        configs[line - 1].append(MovementConfig(node, pos_to_tuple(
-                            row[last_waypoint_index]), pos_to_tuple(row[i]), int(times[last_waypoint_index]), int(times[i])))
-                    last_waypoint_index = i
-            line += 1
 
-    # with open('batallion_movement.csv') as csv_file:
-    #     csv_reader = csv.reader(csv_file, delimiter=',')
-    #     line = 0
-    #     for row in csv_reader:
-    #         if line == 0:
-    #             times = row
-    #             line += 1
-    #             batallion.companies[1].platoons[1].hosts[1].setposition(700, 700, 0)
-    #         else:
-    #             octets = row[0].split('.')
-    #             node = batallion.companies[int(octets[1])
-    #                                        ].platoons[int(octets[2])].hosts[int(octets[3])]
-    #             last_waypoint_index = None
-    #             for i in xrange(1, len(row)):
-    #                 if row[i]:
-    #                     if (last_waypoint_index is None):
-    #                         if (i != 1):
-    #                             configs[line - 1].append(MovementConfig(
-    #                                 node, node.position.get(), pos_to_tuple(row[i]), 0, int(times[i])))
-    #                     else:
-    #                         configs[line - 1].append(MovementConfig(node, pos_to_tuple(
-    #                             row[last_waypoint_index]), pos_to_tuple(row[i]), int(times[last_waypoint_index]), int(times[i])))
-    #                     last_waypoint_index = i
-    #             line += 1
+    with open('/home/linth1/core-scripts/batallion_movement.csv') as csv_file:
+        csv_reader = csv.reader(csv_file, delimiter=',')
+        line = 0
+        for row in csv_reader:
+            if line == 0:
+                times = row
+                line += 1
+            else:
+                configs.append([])
+                octets = row[0].split('.')
+                node = batallion.companies[int(octets[1])
+                                           ].platoons[int(octets[2])].hosts[int(octets[3])]
+                last_waypoint_index = None
+                for i in xrange(1, len(row)):
+                    if row[i]:
+                        if (last_waypoint_index is None):
+                            if (i != 1):
+                                configs[line - 1].append(MovementConfig(
+                                    node, node.position.get(), pos_to_tuple(row[i]), 0, int(times[i])))
+                        else:
+                            configs[line - 1].append(MovementConfig(node, pos_to_tuple(
+                                row[last_waypoint_index]), pos_to_tuple(row[i]), int(times[last_waypoint_index]), int(times[i])))
+                        last_waypoint_index = i
+                line += 1
 
     # node1 = batallion.companies[1].platoons[1].hosts[1]
     # node2 = batallion.companies[1].platoons[1].hosts[2]
@@ -265,7 +235,7 @@ def generate_configs(csv, batallion):
     #     ]
     # ]
 
-    print configs
+    # print configs
     return configs
 
 
@@ -282,10 +252,10 @@ def main():
         ((PLATOONS_IN_COMPANY * (HOSTS_IN_PLATOON + 3)) + 2) + 1
     session.node_count = num_nodes
     print 'Finished creating %d nodes.' % num_nodes
+    session.instantiate()
 
-    configs = generate_configs(CSV, batallion)
     thread = threading.Thread(target=movement_thread,
-                              args=(configs, session, 1000,))
+                              args=(generate_configs(batallion), session, 125,))
     thread.start()
     thread.join()
 
