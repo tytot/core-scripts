@@ -3,107 +3,106 @@
 
 import sys
 import datetime
-import optparse
 import csv
 import math
+import time
+import threading
 from random import seed
 from random import randint
+from itertools import combinations
+from array import *
 
 from core import pycore
 from core.misc import ipaddr
 from core.constants import *
 from core.api import coreapi
-from array import *
-import time
-import threading
 
-COMPANIES_IN_BATALLION = 1
+COMPANIES_IN_BATALLION = 2
 PLATOONS_IN_COMPANY = 5
 HOSTS_IN_PLATOON = 4
 MOVEMENT = True
 
+WIDTH = 3840
+HEIGHT = 2160
+X_MI = 50
+Y_MI = (HEIGHT / WIDTH) * X_MI
+TIME = 60
+MAX_TIME_BT_WP = 20
+MAX_OFFSET = 250
+DISPL = 50
+
+
+def ngon_verts(N, R):
+    verts = []
+    for i in xrange(0, N):
+        verts.append([R * math.cos(2 * math.pi * i / N),
+                      R * math.sin(2 * math.pi * i / N)])
+    return verts
+
 
 class Platoon:
-    def __init__(self, session, batallion_index, company_index, platoon_index):
+    def __init__(self, session, pos, wlan, batallion_index, company_index, platoon_index):
         self.hosts = [None]
         self.batallion_index = batallion_index
         self.company_index = company_index
         self.platoon_index = platoon_index
-        index = (company_index - 1) * PLATOONS_IN_COMPANY + platoon_index
-        x = 150 * (company_index - 1)
-        y = 100 * (platoon_index - 1)
-        LOCATIONS = [
-            [x, y],
-            [x + 50, y],
-            [x + 50, y + 50],
-            [x, y + 50]
-        ]
 
-        local_wlan = session.addobj(cls=pycore.nodes.WlanNode,
-                                    name='wlan%d' % index)
-        local_wlan.setposition(x=x + 25, y=y + 25)
-        self.wlan = local_wlan
-        r = session.addobj(cls=pycore.nodes.CoreNode,
-                           name='r%d' % index)
-        r.setposition(x=x + 75, y=y + 25)
-        last_octet = HOSTS_IN_PLATOON + 1
-        r.newnetif(local_wlan, [
-                   '%d.%d.%d.%d/24' % (batallion_index, company_index, platoon_index, last_octet)])
-        session.services.addservicestonode(r, 'router', None, False)
-        self.router = r
+        verts = ngon_verts(HOSTS_IN_PLATOON, DISPL / 5)
+        LOCATIONS = [(pos[0] + verts[i][0], pos[1] + verts[i][1], 0)
+                     for i in xrange(HOSTS_IN_PLATOON)]
 
-        for i in xrange(1, HOSTS_IN_PLATOON + 1):
-            self.connect_host(session, LOCATIONS[i - 1])
+        for i in xrange(HOSTS_IN_PLATOON):
+            self.connect_host(session, LOCATIONS[i], wlan)
 
-    def connect_host(self, session, pos):
+    def connect_host(self, session, host_pos, wlan):
         host_index = len(self.hosts)
-        index = (self.company_index - 1) * (HOSTS_IN_PLATOON * PLATOONS_IN_COMPANY) + \
-            (self.platoon_index - 1) * HOSTS_IN_PLATOON + host_index
+        index = (self.company_index - 1) * (HOSTS_IN_PLATOON * PLATOONS_IN_COMPANY) \
+            + (self.platoon_index - 1) * HOSTS_IN_PLATOON + host_index
         host = session.addobj(cls=pycore.nodes.CoreNode,
                               name='h%d' % index)
-        host.setposition(x=pos[0], y=pos[1])
-        host.newnetif(self.wlan, [
-                      '%d.%d.%d.%d/24' % (self.batallion_index, self.company_index, self.platoon_index, len(self.hosts))])
-        session.services.addservicestonode(host, 'host',
-                                           'DefaultRoute|SSH', False)
+        host.setposition(x=host_pos[0], y=host_pos[1])
+        host.newnetif(wlan, [
+            '%d.%d.1.%d/24' % (self.batallion_index, self.company_index, index)])
         self.hosts.append(host)
 
 
 class Company:
-    def __init__(self, session, batallion_index, company_index):
+    def __init__(self, session, pos, batallion_index, company_index):
         self.platoons = [None]
         self.batallion_index = batallion_index
         self.company_index = company_index
-        router_index = COMPANIES_IN_BATALLION * PLATOONS_IN_COMPANY + company_index
-        r = session.addobj(cls=pycore.nodes.CoreNode,
-                           name='r%d' % router_index)
-        r_x = 150 * (company_index - 1) + 100
-        r_y = 50 * PLATOONS_IN_COMPANY
-        r.setposition(x=r_x, y=r_y)
-        session.services.addservicestonode(r, 'router', None, False)
-        self.router = r
-        self.wlans = [None]
 
-        for i in xrange(1, PLATOONS_IN_COMPANY + 1):
-            self.connect_platoon(session)
+        p_verts = ngon_verts(PLATOONS_IN_COMPANY, DISPL)
+        P_LOCATIONS = [(pos[0] + p_verts[i][0], pos[1] + p_verts[i][1], 0)
+                       for i in xrange(PLATOONS_IN_COMPANY)]
 
-    def connect_platoon(self, session):
+        r_verts = ngon_verts(COMPANIES_IN_BATALLION * 2, DISPL / 5)
+
+        self.wlan = session.addobj(cls=pycore.nodes.WlanNode,
+                                   name='uwlan%d' % company_index)
+        self.wlan.setposition(x=pos[0], y=pos[1])
+
+        self.routers = [None]
+        for i in xrange(COMPANIES_IN_BATALLION * 2):
+            r_index = (self.company_index - 1) * \
+                (COMPANIES_IN_BATALLION * 2) + 1 + i
+            router = session.addobj(cls=pycore.nodes.CoreNode,
+                                    name='r%d' % r_index)
+            router.setposition(x=pos[0] + r_verts[i][0],
+                               y=pos[1] + r_verts[i][1])
+            session.services.addservicestonode(router, 'router', None, False)
+            index = HOSTS_IN_PLATOON * PLATOONS_IN_COMPANY + 1 + i
+            router.newnetif(
+                self.wlan, ['%d.%d.1.%d/24' % (self.batallion_index, self.company_index, index)])
+            self.routers.append(router)
+
+        for i in xrange(PLATOONS_IN_COMPANY):
+            self.connect_platoon(session, P_LOCATIONS[i])
+
+    def connect_platoon(self, session, platoon_pos):
         platoon_index = len(self.platoons)
-        platoon = Platoon(session, self.batallion_index, self.company_index,
+        platoon = Platoon(session, platoon_pos, self.wlan, self.batallion_index, self.company_index,
                           platoon_index)
-        index = (self.company_index - 1) * PLATOONS_IN_COMPANY + platoon_index
-        wlan = session.addobj(cls=pycore.nodes.WlanNode,
-                              name='t1wlan%d' % index)
-        pr_pos = platoon.router.position.get()
-        sr_pos = self.router.position.get()
-        wlan_x = (pr_pos[0] + sr_pos[0]) / 2
-        wlan_y = (pr_pos[1] + sr_pos[1]) / 2
-        wlan.setposition(x=wlan_x, y=wlan_y)
-        self.wlans.append(wlan)
-        platoon.router.newnetif(
-            wlan, ['%d.%d.%d.1/24' % (self.batallion_index, self.company_index, 4 + platoon_index)])
-        self.router.newnetif(
-            wlan, ['%d.%d.%d.2/24' % (self.batallion_index, self.company_index, 4 + platoon_index)])
         self.platoons.append(platoon)
 
 
@@ -111,37 +110,67 @@ class Batallion:
     def __init__(self, session, batallion_index):
         self.companies = [None]
         self.batallion_index = batallion_index
-        router_index = COMPANIES_IN_BATALLION * \
-            PLATOONS_IN_COMPANY + COMPANIES_IN_BATALLION + 1
-        r = session.addobj(cls=pycore.nodes.CoreNode,
-                           name='r%d' % router_index)
-        r_x = 75 * COMPANIES_IN_BATALLION
-        r_y = 100 * PLATOONS_IN_COMPANY + 50
-        r.setposition(x=r_x, y=r_y)
-        session.services.addservicestonode(r, 'router', None, False)
-        self.router = r
-        self.wlans = [None]
+        self.twlans = [None]
+
+        dist = MAX_OFFSET + DISPL + DISPL / 5
+        pos = (dist, dist, 0)
+        verts = ngon_verts(COMPANIES_IN_BATALLION + 1, MAX_OFFSET)
+        LOCATIONS = [(pos[0] + verts[i][0], pos[1] + verts[i][1], 0)
+                     for i in xrange(COMPANIES_IN_BATALLION + 1)]
+        x = LOCATIONS[0][0]
+        y = LOCATIONS[0][1]
+
+        r_verts = ngon_verts(COMPANIES_IN_BATALLION * 2, DISPL)
+
+        self.wlan = session.addobj(cls=pycore.nodes.WlanNode,
+                                   name='uwlan%d' % (COMPANIES_IN_BATALLION + 1))
+        self.wlan.setposition(x=x, y=y)
+
+        self.routers = [None]
+        for i in xrange(COMPANIES_IN_BATALLION * 2):
+            r_index = COMPANIES_IN_BATALLION * COMPANIES_IN_BATALLION * 2 + 1 + i
+            router = session.addobj(cls=pycore.nodes.CoreNode,
+                                    name='r%d' % r_index)
+            router.setposition(x=x + r_verts[i][0], y=y + r_verts[i][1])
+            session.services.addservicestonode(router, 'router', None, False)
+            index = 1 + i
+            router.newnetif(
+                self.wlan, ['%d.%d.1.%d/24' % (self.batallion_index, COMPANIES_IN_BATALLION + 1, index)])
+            self.routers.append(router)
 
         for i in xrange(1, COMPANIES_IN_BATALLION + 1):
-            self.connect_company(session)
+            self.connect_company(session, LOCATIONS[i])
 
-    def connect_company(self, session):
+        top_nodes = list(self.companies) + [self]
+        for i in xrange(1, len(top_nodes)):
+            start_i = i * 2 - 1
+            for j in xrange(i+1, len(top_nodes)):
+                self.link(
+                    session, top_nodes[i].routers[start_i], top_nodes[j].routers[i*2-1])
+                self.link(
+                    session, top_nodes[i].routers[start_i + 1], top_nodes[j].routers[i*2])
+                start_i += 2
+
+    def connect_company(self, session, company_pos):
         company_index = len(self.companies)
-        company = Company(session, self.batallion_index,
+        company = Company(session, company_pos, self.batallion_index,
                           company_index)
-        wlan = session.addobj(cls=pycore.nodes.WlanNode,
-                              name='t2wlan%d' % company_index)
-        cr_pos = company.router.position.get()
-        sr_pos = self.router.position.get()
-        wlan_x = (cr_pos[0] + sr_pos[0]) / 2
-        wlan_y = (cr_pos[1] + sr_pos[1]) / 2
-        wlan.setposition(x=wlan_x, y=wlan_y)
-        self.wlans.append(wlan)
-        company.router.newnetif(
-            wlan, ['%d.%d.9.1/24' % (self.batallion_index, company_index)])
-        self.router.newnetif(
-            wlan, ['%d.%d.9.2/24' % (self.batallion_index, company_index)])
         self.companies.append(company)
+
+    def link(self, session, router1, router2):
+        index = len(self.twlans)
+        wlan = session.addobj(cls=pycore.nodes.WlanNode,
+                              name='twlan%d' % index)
+        r1_pos = router1.position.get()
+        r2_pos = router2.position.get()
+        wlan_x = (r1_pos[0] + r2_pos[0]) / 2
+        wlan_y = (r1_pos[1] + r2_pos[1]) / 2
+        wlan.setposition(x=wlan_x, y=wlan_y)
+        self.twlans.append(wlan)
+        router1.newnetif(
+            wlan, ['%d.%d.9.1/24' % (self.batallion_index, index)])
+        router2.newnetif(
+            wlan, ['%d.%d.9.2/24' % (self.batallion_index, index)])
 
 
 class MovementConfig:
@@ -165,8 +194,8 @@ def movement_thread(configs, session, refresh_ms):
         for config in configs:
             current = config[0]
             if elapsed >= current.start_time:
-                lerp_amount = (elapsed - current.start_time) / \
-                    (current.end_time - current.start_time)
+                lerp_amount = (elapsed - current.start_time) \
+                    / (current.end_time - current.start_time)
                 delta = (current.end_pos[0] - current.start_pos[0],
                          current.end_pos[1] - current.start_pos[1], 0)
                 new_pos = (current.start_pos[0] + lerp_amount * delta[0],
@@ -180,14 +209,6 @@ def movement_thread(configs, session, refresh_ms):
                     del config[0]
         elapsed += 0.001 * refresh_ms
         time.sleep(0.001 * refresh_ms)
-
-
-def ngon_verts(N, R):
-    verts = [None]
-    for i in xrange(0, N):
-        verts.append([R * math.cos(2 * math.pi * i / N),
-                      R * math.sin(2 * math.pi * i / N)])
-    return verts
 
 
 def generate_configs(batallion):
@@ -244,14 +265,12 @@ def generate_configs(batallion):
 
 
 def generate_random_configs(batallion):
-    WIDTH = 3840
-    HEIGHT = 2160
-    X_MI = 50
-    Y_MI = (HEIGHT / WIDTH) * X_MI
-    TIME = 60
-    MAX_TIME_BT_WP = 20
-    MAX_OFFSET = 200
-    DISPL = 50
+
+    HOST_LOCS = ngon_verts(HOSTS_IN_PLATOON, DISPL / 5)
+    ROUTER_LOCS = ngon_verts(COMPANIES_IN_BATALLION * 2, DISPL / 5)
+
+    margin_min = DISPL + DISPL / 5
+    margin_max = 2 * MAX_OFFSET + DISPL + DISPL / 5
 
     configs = []
     global index
@@ -264,83 +283,105 @@ def generate_random_configs(batallion):
         configs[index].append(config)
         index += 1
 
-    company = batallion.companies[1]
-    c_start_pos = (MAX_OFFSET + DISPL, MAX_OFFSET + DISPL, 0)
-    c_end_pos = (WIDTH - MAX_OFFSET - DISPL,
-                 HEIGHT - MAX_OFFSET - DISPL, 0)
-    c_delta = (c_end_pos[0] - c_start_pos[0], c_end_pos[1] - c_start_pos[1], 0)
+    for c in xrange(1, COMPANIES_IN_BATALLION + 1):
+        company = batallion.companies[c]
+        c_start_pos = company.wlan.position.get()
+        c_end_x = randint(WIDTH - margin_max, WIDTH - margin_min)
+        c_end_y = randint(margin_min, margin_max)
+        c_end_pos = (c_end_x, c_end_y, 0)
+        company.end_pos = c_end_pos
+        c_delta = (c_end_pos[0] - c_start_pos[0],
+                   c_end_pos[1] - c_start_pos[1], 0)
 
-    HOST_LOCS = ngon_verts(HOSTS_IN_PLATOON, DISPL)
-    C_WLAN_LOCS = ngon_verts(PLATOONS_IN_COMPANY, DISPL)
-    B_WLAN_LOCS = ngon_verts(COMPANIES_IN_BATALLION, DISPL)
+        for platoon in company.platoons:
+            if platoon is not None:
+                p_start_time = 0
+                p_offset = [randint(-DISPL, DISPL),
+                            randint(-DISPL, DISPL)]
+                p_start_pos = (
+                    c_start_pos[0] + p_offset[0], c_start_pos[1] + p_offset[1], 0)
+                START_INDEX = index
+                while p_start_time < TIME:
+                    index = START_INDEX
+                    p_end_time = min(
+                        randint(p_start_time + 1, p_start_time + MAX_TIME_BT_WP), TIME)
+                    percentage = float(p_end_time) / TIME
+                    p_offset = [randint(-DISPL, DISPL),
+                                randint(-DISPL, DISPL)]
 
-    for platoon in company.platoons:
-        if platoon is not None:
-            p_start_time = 0
-            p_offset = [randint(-MAX_OFFSET, MAX_OFFSET),
-                        randint(-MAX_OFFSET, MAX_OFFSET)]
-            p_start_pos = (
-                c_start_pos[0] + p_offset[0], c_start_pos[1] + p_offset[1], 0)
-            START_INDEX = index
-            while p_start_time < TIME:
-                index = START_INDEX
-                p_end_time = min(
-                    randint(p_start_time + 1, p_start_time + MAX_TIME_BT_WP), TIME)
-                percentage = float(p_end_time) / TIME
-                p_offset = [randint(-MAX_OFFSET, MAX_OFFSET),
-                            randint(-MAX_OFFSET, MAX_OFFSET)]
+                    p_end_pos = (c_start_pos[0] + (percentage * c_delta[0]) + p_offset[0],
+                                 c_start_pos[1] + (percentage * c_delta[1]) + p_offset[1], 0)
+                    for i in xrange(HOSTS_IN_PLATOON):
+                        host = platoon.hosts[i + 1]
+                        add_config(MovementConfig(host, (p_start_pos[0] + HOST_LOCS[i][0], p_start_pos[1] + HOST_LOCS[i][1], 0), (
+                            p_end_pos[0] + HOST_LOCS[i][0], p_end_pos[1] + HOST_LOCS[i][1], 0), p_start_time, p_end_time))
 
-                p_end_pos = (c_start_pos[0] + (percentage * c_delta[0]) + p_offset[0],
-                             c_start_pos[1] + (percentage * c_delta[1]) + p_offset[1], 0)
-                for i in xrange(1, HOSTS_IN_PLATOON + 1):
-                    host = platoon.hosts[i]
-                    add_config(MovementConfig(host, (p_start_pos[0] + HOST_LOCS[i][0], p_start_pos[1] + HOST_LOCS[i][1], 0), (
-                        p_end_pos[0] + HOST_LOCS[i][0], p_end_pos[1] + HOST_LOCS[i][1], 0), p_start_time, p_end_time))
+                    p_start_time = p_end_time
+                    p_start_pos = p_end_pos
 
-                add_config(MovementConfig(platoon.wlan, p_start_pos,
-                           p_end_pos, p_start_time, p_end_time))
-                add_config(MovementConfig(platoon.router, (p_start_pos[0], p_start_pos[1] + (2 * DISPL), 0), (
-                    p_end_pos[0], p_end_pos[1] + (2 * DISPL), 0), p_start_time, p_end_time))
+        add_config(MovementConfig(
+            company.wlan, c_start_pos, c_end_pos, 0, TIME))
+        for i in xrange(2 * COMPANIES_IN_BATALLION):
+            c_router = company.routers[i + 1]
+            add_config(MovementConfig(c_router, (c_start_pos[0] + ROUTER_LOCS[i][0], c_start_pos[1] + ROUTER_LOCS[i][1], 0), (
+                c_end_pos[0] + ROUTER_LOCS[i][0], c_end_pos[1] + ROUTER_LOCS[i][1], 0), 0, TIME))
 
-                p_start_time=p_end_time
-                p_start_pos=p_end_pos
-    add_config(MovementConfig(company.router, c_start_pos, c_end_pos, 0, TIME))
-    for i in xrange(1, PLATOONS_IN_COMPANY + 1):
-        c_wlan=company.wlans[i]
-        add_config(MovementConfig(c_wlan, (c_start_pos[0] + C_WLAN_LOCS[i][0], c_start_pos[1] + C_WLAN_LOCS[i][1], 0), (
-            c_end_pos[0] + C_WLAN_LOCS[i][0], c_end_pos[1] + C_WLAN_LOCS[i][1], 0), 0, TIME))
+    b_start_pos = batallion.wlan.position.get()
+    b_end_x = randint(WIDTH - margin_max, WIDTH - margin_min)
+    b_end_y = randint(margin_min, margin_max)
+    b_end_pos = (b_end_x, b_end_y, 0)
+    batallion.end_pos = b_end_pos
+    add_config(MovementConfig(batallion.wlan,
+                              b_start_pos, b_end_pos, 0, TIME))
+    for i in xrange(2 * COMPANIES_IN_BATALLION):
+        b_router = batallion.routers[i + 1]
+        add_config(MovementConfig(b_router, (b_start_pos[0] + ROUTER_LOCS[i][0], b_start_pos[1] + ROUTER_LOCS[i][1], 0), (
+            b_end_pos[0] + ROUTER_LOCS[i][0], b_end_pos[1] + ROUTER_LOCS[i][1], 0), 0, TIME))
 
-    add_config(MovementConfig(batallion.router, c_start_pos, c_end_pos, 0, TIME))
-    for i in xrange(1, COMPANIES_IN_BATALLION + 1):
-        b_wlan=batallion.wlans[i]
-        add_config(MovementConfig(b_wlan, (c_start_pos[0] + B_WLAN_LOCS[i][0], c_start_pos[1] + B_WLAN_LOCS[i][1], 0), (
-            c_end_pos[0] + B_WLAN_LOCS[i][0], c_end_pos[1] + B_WLAN_LOCS[i][1], 0), 0, TIME))
+    top_nodes = list(batallion.companies) + [batallion]
+    cutoff = COMPANIES_IN_BATALLION * 2
+    tn_index = 1
+    for i in xrange(1, len(batallion.twlans)):
+        twlan = batallion.twlans[i]
+        if i <= cutoff:
+            top_node = top_nodes[tn_index]
+            add_config(MovementConfig(
+                twlan, top_node.wlan.position.get(), top_node.end_pos, 0, TIME))
+        else:
+            cutoff += cutoff / tn_index - (tn_index + 1)
+            tn_index += 1
 
     return configs
 
 
 def main():
 
-    start=datetime.datetime.now()
+    start = datetime.datetime.now()
 
-    session=pycore.Session(persistent = True)
+    session = pycore.Session(persistent=True)
     if 'server' in globals():
         server.addsession(session)
-    batallion=Batallion(session, 1)
+    batallion = Batallion(session, 1)
 
-    num_nodes=COMPANIES_IN_BATALLION * \
-        ((PLATOONS_IN_COMPANY * (HOSTS_IN_PLATOON + 3)) + 2) + 1
-    session.node_count=num_nodes
-    print 'Finished creating %d nodes.' % num_nodes
-    session.instantiate()
+    # num_nodes = COMPANIES_IN_BATALLION * \
+    #     ((PLATOONS_IN_COMPANY * (HOSTS_IN_PLATOON + 3)) + 2) + 1
+    # session.node_count = num_nodes
+    # session.instantiate()
+    print 'Finished creating nodes.'
 
     if MOVEMENT:
-        thread=threading.Thread(target = movement_thread,
-                                  args = (generate_random_configs(batallion), session, 125,))
+        thread = threading.Thread(target=movement_thread,
+                                  args=(generate_random_configs(batallion), session, 125,))
         thread.start()
         thread.join()
 
     print "elapsed time: %s" % (datetime.datetime.now() - start)
+
+    # time.sleep(10)
+    # print "here"
+    # session.datacollect()
+    # session.setstate(state=coreapi.CORE_EVENT_SHUTDOWN_STATE,
+    #                  info=True, sendevent=True, returnevent=True)
 
 
 if __name__ == '__main__' or __name__ == '__builtin__':
