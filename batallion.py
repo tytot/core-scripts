@@ -13,26 +13,36 @@ from itertools import combinations
 from array import *
 
 from core import pycore
+from core import location
 from core.misc import ipaddr
 from core.constants import *
 from core.api import coreapi
 from core.mobility import BasicRangeModel
 
-COMPANIES_IN_BATALLION = 1
+# START SETTINGS
+COMPANIES_IN_BATALLION = 3
 PLATOONS_IN_COMPANY = 5
 HOSTS_IN_PLATOON = 4
 MOVEMENT = True
+RANDOM = True
+REFRESH_MS = 1000
 
 WIDTH = 3840
 HEIGHT = 2160
 X_MI = 50
-Y_MI = (HEIGHT / WIDTH) * X_MI
+
 TIME = 60
 C_MAX_TIME_BT_WP = 40
 P_MAX_TIME_BT_WP = 20
-MAX_C_DISPL = 400
-MAX_P_DISPL = 200
-WLAN_RANGE = 500
+MAX_C_DISPL = 10000
+MAX_P_DISPL = 4000
+WLAN_RANGE = 10000
+# END SETTINGS
+
+SCALE = X_MI * 1609 / WIDTH
+MAX_C_DISPL = MAX_C_DISPL / SCALE
+MAX_P_DISPL = MAX_P_DISPL / SCALE
+WLAN_RANGE = WLAN_RANGE / SCALE
 
 
 def ngon_verts(N, R):
@@ -72,6 +82,7 @@ class Platoon:
 class Company:
     def __init__(self, session, pos, batallion_index, company_index):
         self.platoons = [None]
+        self.hosts = [None]
         self.batallion_index = batallion_index
         self.company_index = company_index
         self.twlans = []
@@ -111,6 +122,7 @@ class Company:
         platoon = Platoon(session, platoon_pos, self.wlan, self.batallion_index, self.company_index,
                           platoon_index)
         self.platoons.append(platoon)
+        self.hosts.extend(platoon.hosts[1:])
 
 
 class Batallion:
@@ -127,7 +139,7 @@ class Batallion:
         x = LOCATIONS[0][0]
         y = LOCATIONS[0][1]
 
-        r_verts = ngon_verts(COMPANIES_IN_BATALLION * 2, MAX_P_DISPL / 2)
+        r_verts = ngon_verts(COMPANIES_IN_BATALLION * 2, MAX_P_DISPL / 10)
 
         self.wlan = session.addobj(cls=pycore.nodes.WlanNode,
                                    name='uwlan%d' % (COMPANIES_IN_BATALLION + 1))
@@ -207,23 +219,30 @@ def movement_thread(configs, session, refresh_ms):
     while configs:
         configs = [config for config in configs if config != []]
         for config in configs:
-            current = config[0]
-            if elapsed >= current.start_time:
+            if elapsed >= config[0].start_time:
+                while (elapsed > config[0].end_time):
+                    print str(elapsed) + ' vs ' + str(config[0].end_time)
+                    del config[0]
+                
+                current = config[0]
+
                 lerp_amount = (elapsed - current.start_time) \
                     / (current.end_time - current.start_time)
                 delta = (current.end_pos[0] - current.start_pos[0],
                          current.end_pos[1] - current.start_pos[1], 0)
-                new_x = min(current.start_pos[0] +
-                            lerp_amount * delta[0], WIDTH)
-                new_y = min(current.start_pos[1] +
-                            lerp_amount * delta[1], HEIGHT)
+                new_x = max(min(current.start_pos[0] +
+                            lerp_amount * delta[0], WIDTH), 0)
+                new_y = max(min(current.start_pos[1] +
+                            lerp_amount * delta[1], HEIGHT), 0)
                 current.node.setposition(new_x, new_y, 0)
                 msg = current.node.tonodemsg(flags=0)
                 session.broadcastraw(None, msg)
                 session.sdt.updatenode(
                     current.node.objid, flags=0, x=new_x, y=new_y, z=0)
+
                 if elapsed + 0.001 * refresh_ms > current.end_time:
                     del config[0]
+
         elapsed += 0.001 * refresh_ms
         time.sleep(0.001 * refresh_ms)
 
@@ -245,8 +264,8 @@ def generate_configs(batallion):
             else:
                 configs.append([])
                 octets = row[0].split('.')
-                node = batallion.companies[int(octets[1])
-                                           ].platoons[int(octets[2])].hosts[int(octets[3])]
+                node = batallion.companies[int(
+                    octets[1])].hosts[int(octets[3])]
                 last_waypoint_index = None
                 for i in xrange(1, len(row)):
                     if row[i]:
@@ -260,6 +279,7 @@ def generate_configs(batallion):
                         last_waypoint_index = i
                 line += 1
 
+    print configs
     return configs
 
 
@@ -380,12 +400,17 @@ def main():
     print 'Finished creating %d nodes.' % num_nodes
 
     if MOVEMENT:
+        if RANDOM:
+            generator = generate_random_configs
+        else:
+            generator = generate_configs
+
         thread = threading.Thread(target=movement_thread,
-                                  args=(generate_random_configs(batallion), session, 250,))
+                                  args=(generator(batallion), session, REFRESH_MS,))
         thread.start()
         thread.join()
 
-    session.node_count = num_nodes       
+    session.node_count = num_nodes
     session.instantiate()
 
     print "elapsed time: %s" % (datetime.datetime.now() - start)
