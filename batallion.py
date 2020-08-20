@@ -20,12 +20,11 @@ from core.api import coreapi
 from core.mobility import BasicRangeModel
 
 # START SETTINGS
-COMPANIES_IN_BATALLION = 3
-PLATOONS_IN_COMPANY = 5
-HOSTS_IN_PLATOON = 4
+COMPANIES_IN_BATALLION = 4
+PLATOONS_IN_COMPANY = 2
+HOSTS_IN_PLATOON = 2
 MOVEMENT = True
-RANDOM = True
-REFRESH_MS = 1000
+REFRESH_MS = 500
 
 WIDTH = 3840
 HEIGHT = 2160
@@ -34,9 +33,9 @@ X_MI = 50
 TIME = 60
 C_MAX_TIME_BT_WP = 40
 P_MAX_TIME_BT_WP = 20
-MAX_C_DISPL = 10000
-MAX_P_DISPL = 4000
-WLAN_RANGE = 10000
+MAX_C_DISPL = 2000
+MAX_P_DISPL = 2000
+WLAN_RANGE = 20000
 # END SETTINGS
 
 SCALE = X_MI * 1609 / WIDTH
@@ -220,10 +219,9 @@ def movement_thread(configs, session, refresh_ms):
         configs = [config for config in configs if config != []]
         for config in configs:
             if elapsed >= config[0].start_time:
-                while (elapsed > config[0].end_time):
-                    print str(elapsed) + ' vs ' + str(config[0].end_time)
+                while elapsed > config[0].end_time:
                     del config[0]
-                
+
                 current = config[0]
 
                 lerp_amount = (elapsed - current.start_time) \
@@ -231,9 +229,9 @@ def movement_thread(configs, session, refresh_ms):
                 delta = (current.end_pos[0] - current.start_pos[0],
                          current.end_pos[1] - current.start_pos[1], 0)
                 new_x = max(min(current.start_pos[0] +
-                            lerp_amount * delta[0], WIDTH), 0)
+                                lerp_amount * delta[0], WIDTH), 0)
                 new_y = max(min(current.start_pos[1] +
-                            lerp_amount * delta[1], HEIGHT), 0)
+                                lerp_amount * delta[1], HEIGHT), 0)
                 current.node.setposition(new_x, new_y, 0)
                 msg = current.node.tonodemsg(flags=0)
                 session.broadcastraw(None, msg)
@@ -248,138 +246,184 @@ def movement_thread(configs, session, refresh_ms):
 
 
 def generate_configs(batallion):
+    configs = []
+
     def pos_to_tuple(pos):
         coords = pos.split()
         return (int(coords[0]), int(coords[1]), 0)
 
-    configs = []
-
     with open('/home/linth1/core-scripts/batallion_movement.csv') as csv_file:
         csv_reader = csv.reader(csv_file, delimiter=',')
-        line = 0
+        index = 0
         for row in csv_reader:
-            if line == 0:
+            if index == 0:
                 times = row
-                line += 1
             else:
-                configs.append([])
                 octets = row[0].split('.')
-                node = batallion.companies[int(
-                    octets[1])].hosts[int(octets[3])]
-                last_waypoint_index = None
-                for i in xrange(1, len(row)):
-                    if row[i]:
-                        if (last_waypoint_index is None):
-                            if (i != 1):
-                                configs[line - 1].append(MovementConfig(
-                                    node, node.position.get(), pos_to_tuple(row[i]), 0, int(times[i])))
-                        else:
-                            configs[line - 1].append(MovementConfig(node, pos_to_tuple(
-                                row[last_waypoint_index]), pos_to_tuple(row[i]), int(times[last_waypoint_index]), int(times[i])))
-                        last_waypoint_index = i
-                line += 1
+                if len(octets) == 4:
+                    node = batallion.companies[int(
+                        octets[1])].hosts[int(octets[3])]
+                    if not hasattr(node, 'config_index'):
+                        setattr(node, 'config_index', len(configs))
+                        configs.append([])
+                    else:
+                        configs[node.config_index] = []
 
+                    last_wp_index = None
+                    for i in xrange(1, len(row)):
+                        if row[i]:
+                            if (last_wp_index is None):
+                                if (i != 1):
+                                    configs[node.config_index].append(MovementConfig(
+                                        node, node.position.get(), pos_to_tuple(row[i]), 0, int(times[i])))
+                            else:
+                                configs[node.config_index].append(MovementConfig(node, pos_to_tuple(
+                                    row[last_wp_index]), pos_to_tuple(row[i]), int(times[last_wp_index]), int(times[i])))
+                            last_wp_index = i
+                elif len(octets) == 2:
+                    company = batallion.companies[int(octets[1])]
+                    company.waypoints = []
+                    company.wp_times = []
+                    for i in xrange(1, len(row)):
+                        if row[i]:
+                            company.waypoints.append(pos_to_tuple(row[i]))
+                            company.wp_times.append(int(times[i]))
+                    configs = generate_random_configs(configs, company, True)
+                elif len(octets) == 1:
+                    batallion.waypoints = []
+                    batallion.wp_times = []
+                    for i in xrange(1, len(row)):
+                        if row[i]:
+                            batallion.waypoints.append(
+                                pos_to_tuple(row[i]))
+                            batallion.wp_times.append(int(times[i]))
+                    configs = generate_random_configs(configs, batallion)
+
+            index += 1
     print configs
     return configs
 
 
-def generate_random_configs(batallion):
-
+def generate_random_configs(configs, unit, reset=False):
     HOST_LOCS = ngon_verts(HOSTS_IN_PLATOON, MAX_P_DISPL / 10)
     ROUTER_LOCS = ngon_verts(COMPANIES_IN_BATALLION * 2, MAX_P_DISPL / 10)
 
     margin = MAX_C_DISPL + MAX_P_DISPL + MAX_P_DISPL / 10
 
-    configs = []
-    global index
-    index = 0
-
-    def add_config(config):
-        global index
-        if (index >= len(configs)):
+    def add_config(node, config):
+        if not hasattr(node, 'config_index'):
+            setattr(node, 'config_index', len(configs))
             configs.append([])
-        configs[index].append(config)
-        index += 1
+        configs[node.config_index].append(config)
 
-    for c in xrange(1, COMPANIES_IN_BATALLION + 1):
-        company = batallion.companies[c]
+    if isinstance(unit, Batallion):
+        batallion = unit
+        companies = batallion.companies[1:]
+
+        if not hasattr(batallion, 'waypoints'):
+            b_start_pos = batallion.wlan.position.get()
+            b_end_x = randint(WIDTH - margin, WIDTH)
+            b_end_y = randint(HEIGHT - margin, HEIGHT)
+            b_end_pos = (b_end_x, b_end_y, 0)
+
+            b.waypoints = [b_start_pos, b_end_pos]
+            b.wp_times = [0, TIME]
+
+        for i in xrange(1, len(batallion.waypoints)):
+            b_wp = batallion.waypoints[i]
+            b_wp_time = batallion.wp_times[i]
+            last_b_wp = batallion.waypoints[i - 1]
+            last_b_wp_time = batallion.wp_times[i - 1]
+
+            add_config(batallion.wlan, MovementConfig(batallion.wlan,
+                                                      last_b_wp, b_wp, last_b_wp_time, b_wp_time))
+            for i in xrange(2 * COMPANIES_IN_BATALLION):
+                b_router = batallion.routers[i + 1]
+                add_config(b_router, MovementConfig(b_router, (last_b_wp[0] + ROUTER_LOCS[i][0], last_b_wp[1] + ROUTER_LOCS[i][1], 0), (
+                    b_wp[0] + ROUTER_LOCS[i][0], b_wp[1] + ROUTER_LOCS[i][1], 0), last_b_wp_time, b_wp_time))
+
+            for twlan in batallion.twlans:
+                add_config(twlan, MovementConfig(
+                    twlan, last_b_wp, b_wp, last_b_wp_time, b_wp_time))
+
+    elif isinstance(unit, Company):
+        companies = [unit]
+
+    for company in companies:
+        if reset:
+            for platoon in company.platoons[1:]:
+                if hasattr(platoon, 'start_pos'):
+                    del platoon.start_pos
+                for host in platoon.hosts[1:]:
+                    configs[host.config_index] = []
+            configs[company.wlan.config_index] = []
+            for router in company.routers[1:]:
+                configs[router.config_index] = []
+            for twlan in company.twlans:
+                configs[twlan.config_index] = []
+
         c_start_time = 0
-        c_start_pos = company.wlan.position.get()
-        last_c_mid_pos = company.wlan.position.get()
-        c_end_x = randint(WIDTH - margin, WIDTH)
-        c_end_y = randint(HEIGHT - margin, HEIGHT)
-        c_end_pos = (c_end_x, c_end_y, 0)
-        c_delta = (c_end_pos[0] - c_start_pos[0],
-                   c_end_pos[1] - c_start_pos[1], 0)
+        if not hasattr(company, 'waypoints'):
+            company.waypoints = []
+            company.wp_times = []
 
-        while c_start_time < TIME:
-            c_mid_time = min(
-                randint(c_start_time + 1, c_start_time + C_MAX_TIME_BT_WP), TIME)
-            c_percentage = float(c_mid_time) / TIME
-            c_offset = [randint(-MAX_C_DISPL, MAX_C_DISPL),
-                        randint(-MAX_C_DISPL, MAX_C_DISPL)]
-            c_mid_pos = (c_start_pos[0] + (c_percentage * c_delta[0]) + c_offset[0],
-                         c_start_pos[1] + (c_percentage * c_delta[1]) + c_offset[1], 0)
+            for i in xrange(len(batallion.waypoints)):
+                b_wp = batallion.waypoints[i]
+                b_wp_time = batallion.wp_times[i]
 
-            p_delta = (c_mid_pos[0] - last_c_mid_pos[0],
-                       c_mid_pos[1] - last_c_mid_pos[1], 0)
+                if i <= 0 or b_wp[0] != batallion.waypoints[i-1][0] or b_wp[1] != batallion.waypoints[i-1][1]:
+                    c_offset = [randint(-MAX_C_DISPL, MAX_C_DISPL),
+                                randint(-MAX_C_DISPL, MAX_C_DISPL)]
 
-            for platoon in company.platoons:
-                if platoon is not None:
-                    p_start_time = c_start_time
+                c_wp = (b_wp[0] + c_offset[0], b_wp[1] + c_offset[1], 0)
+                company.waypoints.append(c_wp)
+                company.wp_times.append(b_wp_time)
+
+        for i in xrange(1, len(company.waypoints)):
+            c_wp = company.waypoints[i]
+            c_wp_time = company.wp_times[i]
+            last_c_wp = company.waypoints[i - 1]
+            last_c_wp_time = company.wp_times[i - 1]
+
+            p_delta = (c_wp[0] - last_c_wp[0],
+                       c_wp[1] - last_c_wp[1], 0)
+
+            for platoon in company.platoons[1:]:
+                p_start_time = last_c_wp_time
+                p_offset = [randint(-MAX_P_DISPL, MAX_P_DISPL),
+                            randint(-MAX_P_DISPL, MAX_P_DISPL)]
+                if not hasattr(platoon, 'start_pos'):
+                    platoon.start_pos = (
+                        last_c_wp[0] + p_offset[0], last_c_wp[1] + p_offset[1], 0)
+
+                while p_start_time < c_wp_time:
+                    p_end_time = min(
+                        randint(p_start_time + 1, p_start_time + P_MAX_TIME_BT_WP), c_wp_time)
+                    percentage = float(p_end_time -
+                                  last_c_wp_time) / (c_wp_time - last_c_wp_time)
                     p_offset = [randint(-MAX_P_DISPL, MAX_P_DISPL),
                                 randint(-MAX_P_DISPL, MAX_P_DISPL)]
-                    if not hasattr(platoon, "start_pos"):
-                        platoon.start_pos = (
-                            last_c_mid_pos[0] + p_offset[0], last_c_mid_pos[1] + p_offset[1], 0)
-                    START_INDEX = index
-                    while p_start_time < c_mid_time:
-                        index = START_INDEX
-                        p_end_time = min(
-                            randint(p_start_time + 1, p_start_time + P_MAX_TIME_BT_WP), c_mid_time)
-                        percentage = (float(p_end_time) -
-                                      c_start_time) / (c_mid_time - c_start_time)
-                        p_offset = [randint(-MAX_P_DISPL, MAX_P_DISPL),
-                                    randint(-MAX_P_DISPL, MAX_P_DISPL)]
-                        p_end_pos = (last_c_mid_pos[0] + (percentage * p_delta[0]) + p_offset[0],
-                                     last_c_mid_pos[1] + (percentage * p_delta[1]) + p_offset[1], 0)
-                        for i in xrange(HOSTS_IN_PLATOON):
-                            host = platoon.hosts[i + 1]
-                            add_config(MovementConfig(host, (platoon.start_pos[0] + HOST_LOCS[i][0], platoon.start_pos[1] + HOST_LOCS[i][1], 0), (
-                                p_end_pos[0] + HOST_LOCS[i][0], p_end_pos[1] + HOST_LOCS[i][1], 0), p_start_time, p_end_time))
+                    p_end_pos = (last_c_wp[0] + (percentage * p_delta[0]) + p_offset[0],
+                                 last_c_wp[1] + (percentage * p_delta[1]) + p_offset[1], 0)
+                    for i in xrange(HOSTS_IN_PLATOON):
+                        host = platoon.hosts[i + 1]
+                        add_config(host, MovementConfig(host, (platoon.start_pos[0] + HOST_LOCS[i][0], platoon.start_pos[1] + HOST_LOCS[i][1], 0), (
+                            p_end_pos[0] + HOST_LOCS[i][0], p_end_pos[1] + HOST_LOCS[i][1], 0), p_start_time, p_end_time))
 
-                        p_start_time = p_end_time
-                        platoon.start_pos = p_end_pos
+                    p_start_time = p_end_time
+                    platoon.start_pos = p_end_pos
 
-            add_config(MovementConfig(
-                company.wlan, last_c_mid_pos, c_mid_pos, c_start_time, c_mid_time))
+            add_config(company.wlan, MovementConfig(
+                company.wlan, last_c_wp, c_wp, last_c_wp_time, c_wp_time))
 
             for i in xrange(2 * COMPANIES_IN_BATALLION):
                 c_router = company.routers[i + 1]
-                add_config(MovementConfig(c_router, (last_c_mid_pos[0] + ROUTER_LOCS[i][0], last_c_mid_pos[1] + ROUTER_LOCS[i][1], 0), (
-                    c_mid_pos[0] + ROUTER_LOCS[i][0], c_mid_pos[1] + ROUTER_LOCS[i][1], 0), c_start_time, c_mid_time))
+                add_config(c_router, MovementConfig(c_router, (last_c_wp[0] + ROUTER_LOCS[i][0], last_c_wp[1] + ROUTER_LOCS[i][1], 0), (
+                    c_wp[0] + ROUTER_LOCS[i][0], c_wp[1] + ROUTER_LOCS[i][1], 0), last_c_wp_time, c_wp_time))
 
             for twlan in company.twlans:
-                add_config(MovementConfig(twlan, last_c_mid_pos,
-                                          c_mid_pos, c_start_time, c_mid_time))
-
-            c_start_time = c_mid_time
-            last_c_mid_pos = c_mid_pos
-
-    b_start_pos = batallion.wlan.position.get()
-    b_end_x = randint(WIDTH - margin, WIDTH)
-    b_end_y = randint(HEIGHT - margin, HEIGHT)
-    b_end_pos = (b_end_x, b_end_y, 0)
-    add_config(MovementConfig(batallion.wlan,
-                              b_start_pos, b_end_pos, 0, TIME))
-    for i in xrange(2 * COMPANIES_IN_BATALLION):
-        b_router = batallion.routers[i + 1]
-        add_config(MovementConfig(b_router, (b_start_pos[0] + ROUTER_LOCS[i][0], b_start_pos[1] + ROUTER_LOCS[i][1], 0), (
-            b_end_pos[0] + ROUTER_LOCS[i][0], b_end_pos[1] + ROUTER_LOCS[i][1], 0), 0, TIME))
-
-    for twlan in batallion.twlans:
-        add_config(MovementConfig(
-            twlan, b_start_pos, b_end_pos, 0, TIME))
+                add_config(twlan, MovementConfig(
+                    twlan, last_c_wp, c_wp, last_c_wp_time, c_wp_time))
 
     return configs
 
@@ -400,13 +444,8 @@ def main():
     print 'Finished creating %d nodes.' % num_nodes
 
     if MOVEMENT:
-        if RANDOM:
-            generator = generate_random_configs
-        else:
-            generator = generate_configs
-
         thread = threading.Thread(target=movement_thread,
-                                  args=(generator(batallion), session, REFRESH_MS,))
+                                  args=(generate_configs(batallion), session, REFRESH_MS,))
         thread.start()
         thread.join()
 
